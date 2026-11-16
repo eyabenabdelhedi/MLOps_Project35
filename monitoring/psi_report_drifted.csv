@@ -1,0 +1,8 @@
+feature,psi,status,method
+tenure_months,2.4252,ALERT,numeric (10 quantile boxes)
+support_tickets,1.4495,ALERT,discrete values
+monthly_charges,0.9653,ALERT,numeric (10 quantile boxes)
+contract_type,0.2489,WARNING,categories
+payment_delays,0.2322,WARNING,discrete values
+monthly_usage_hours,0.0102,STABLE,numeric (10 quantile boxes)
+company_size,0.0022,STABLE,categories
