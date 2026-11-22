@@ -154,12 +154,12 @@ The tests check the narrative verification: exact formatting of the facts, accep
 | Model | Validation ROC-AUC |
 |---|---|
 | Logistic regression | 0.816 (baseline, not served) |
-| Gradient boosting | 0.796 (`@champion`) |
-| Random forest | 0.792 (`@challenger`) |
+| Gradient boosting | 0.796 |
+| Random forest | 0.792 |
 
-Logistic regression scores slightly higher but cannot be explained with `shap.TreeExplainer`, so only tree models compete for `@champion`.
+Logistic regression scores slightly higher but cannot be explained with `shap.TreeExplainer`, so only tree models compete for `@champion`. The versions currently holding `@champion` and `@challenger` are shown in the MLflow model registry.
 
-Drift workflow on a shifted test batch: PSI flagged `monthly_charges` (1.807) and `support_tickets` (6.642) as significant while the other features stayed stable. The retrained candidate scored F1 0.7154 and AUC 0.7935 on the holdout against F1 0.7179 and AUC 0.7963 for the champion, so the gate **did not promote** it.
+Drift workflow on a simulated shifted batch (1000 customers): PSI flagged `tenure_months` (2.471), `support_tickets` (1.192) and `monthly_charges` (0.987) as significant and `contract_type` (0.232) as moderate, while `monthly_usage_hours`, `company_size` and `payment_delays` stayed stable. The alert triggered retraining. On the 1200-row holdout, the new challenger (v7) scored AUC 0.7972 and F1 0.7156, identical to the champion (v3), because the simulated batch carries no new labels. The gate therefore **kept the champion**: a challenger must beat it by more than 0.002 on both AUC and F1. A real promotion needs new labelled customers (`--append-labelled`).
 
 Example SHAP waterfall: `docs/waterfall_api.png`
 
@@ -173,9 +173,9 @@ Example SHAP waterfall: `docs/waterfall_api.png`
 ## Contributors
 
 - Eya Ibn Abdelhedi
-- Midani Amira 
-- Araar Ghofrane 
-- Yengui Amine 
+- Midani Amira
+- Araar Ghofrane
+- Yengui Amine
 
 ## Academic project
 
