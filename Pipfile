@@ -1,0 +1,30 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+mlflow = "==3.18.0"
+scikit-learn = "==1.9.1"
+shap = "==0.54.1"
+django = "==6.1.3"
+djangorestframework = "==3.18.3"
+pandas = "==3.1.1"
+numpy = "==2.5.4"
+matplotlib = "==3.11.2"
+cloudpickle = "==3.1.2"
+psycopg2-binary = "==2.9.13"
+
+[dev-packages]
+pytest = "*"
+pytest-django = "*"
+
+[scripts]
+mlflow-server = "mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlartifacts --host 127.0.0.1 --port 5000"
+train = "python training/train.py"
+register = "python training/register.py"
+gate = "python training/retrain_gate.py --mode registered"
+drift = "python monitoring/check_drift.py"
+migrate = "python manage.py migrate"
+serve = "python manage.py runserver"
+test = "pytest"
