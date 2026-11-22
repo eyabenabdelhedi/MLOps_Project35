@@ -5,6 +5,9 @@ current champion on BOTH F1 and ROC-AUC, measured on the SAME holdout set.
 Usage (run from the project root):
     python training/retrain_gate.py --mode registered   # compare @challenger vs @champion
     python training/retrain_gate.py --mode weak         # train a deliberately weak candidate, then compare
+    python training/retrain_gate.py --mode retrain      # train a new, tuned candidate, then compare
+
+Other scripts (e.g. training/workflow.py) can call run_gate() directly.
 """
 
 import argparse
@@ -33,6 +36,22 @@ CAT = ["contract_type", "company_size"]
 mlflow.set_tracking_uri(MLFLOW_URI)
 client = MlflowClient()
 
+# The two kinds of candidate this script can train and register as @challenger
+CANDIDATES = {
+    "weak": {
+        "run_name": "weak_candidate",
+        "model_type": "weak_gradient_boosting",
+        "make": lambda: GradientBoostingClassifier(
+            n_estimators=15, learning_rate=0.05, max_depth=1, random_state=42),
+    },
+    "retrain": {
+        "run_name": "retrained_candidate",
+        "model_type": "retrained_gradient_boosting",
+        "make": lambda: GradientBoostingClassifier(
+            n_estimators=300, learning_rate=0.05, max_depth=4, subsample=0.8, random_state=7),
+    },
+}
+
 
 # ---------- 1) The exam: SAME split as train.py (same seed, same stratification) ----------
 def load_split():
@@ -56,7 +75,7 @@ def load_version(version):
     return mlflow.sklearn.load_model(f"models:/{MODEL_NAME}/{version}")
 
 
-# ---------- 3) A deliberately weak candidate (for the "rejected" demo) ----------
+# ---------- 3) Training a candidate and pointing @challenger at it ----------
 def build_pipeline(clf):
     num = Pipeline([("imp", SimpleImputer(strategy="median")),
                     ("sc", StandardScaler())])
@@ -66,14 +85,15 @@ def build_pipeline(clf):
     return Pipeline([("preprocess", pre), ("clf", clf)])
 
 
-def register_weak_candidate(X_train, y_train):
-    """Train a tiny model (15 shallow trees), register it, and point @challenger at it."""
+def register_candidate(kind, X_train, y_train):
+    """Train a candidate ('weak' or 'retrain'), register it, and point @challenger at it."""
+    spec = CANDIDATES[kind]
+    clf = spec["make"]()
     mlflow.set_experiment("churn-scoring")
-    weak = GradientBoostingClassifier(n_estimators=15, learning_rate=0.05,
-                                      max_depth=1, random_state=42)
-    pipe = build_pipeline(weak).fit(X_train, y_train)
-    with mlflow.start_run(run_name="weak_candidate"):
-        mlflow.log_param("model_type", "weak_gradient_boosting")
+    pipe = build_pipeline(clf).fit(X_train, y_train)
+    with mlflow.start_run(run_name=spec["run_name"]):
+        mlflow.log_param("model_type", spec["model_type"])
+        mlflow.log_params({f"clf__{k}": v for k, v in clf.get_params().items()})
         info = mlflow.sklearn.log_model(
             pipe,
             name="model",
@@ -84,26 +104,31 @@ def register_weak_candidate(X_train, y_train):
         )
     version = info.registered_model_version
     client.set_registered_model_alias(MODEL_NAME, "challenger", version)
-    print(f"Registered a weak candidate as version {version} and set it as @challenger.")
+    print(f"Registered a '{kind}' candidate as version {version} and set it as @challenger.")
 
 
 # ---------- 4) The gate ----------
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["registered", "weak"], default="registered")
-    args = parser.parse_args()
+def run_gate(candidate=None, trigger="manual", drift_alerts=None):
+    """
+    Compare @challenger with @champion and promote only if it wins on AUC and F1.
 
+    candidate    : None (use the existing @challenger), 'weak' or 'retrain' (train a new one first)
+    trigger      : 'manual' or 'psi_drift' (who started this run; saved in MLflow)
+    drift_alerts : number of PSI alerts that triggered the run (saved in MLflow)
+
+    Returns "PROMOTED", "REJECTED" or "SKIPPED".
+    """
     X_train, X_test, y_train, y_test = load_split()
 
-    if args.mode == "weak":
-        register_weak_candidate(X_train, y_train)
+    if candidate:
+        register_candidate(candidate, X_train, y_train)
 
     champion_version = version_of("champion")
     challenger_version = version_of("challenger")
 
     if champion_version == challenger_version:
         print("Champion and challenger are the same version: nothing to compare.")
-        return
+        return "SKIPPED"
 
     champion = evaluate(load_version(champion_version), X_test, y_test)
     challenger = evaluate(load_version(challenger_version), X_test, y_test)
@@ -126,6 +151,9 @@ def main():
                            "challenger_version": challenger_version})
         mlflow.log_metrics({"champion_auc": champion["auc"], "champion_f1": champion["f1"],
                             "challenger_auc": challenger["auc"], "challenger_f1": challenger["f1"]})
+        if drift_alerts is not None:
+            mlflow.log_metric("drift_alert_count", drift_alerts)
+        mlflow.set_tag("trigger", trigger)
         mlflow.set_tag("decision", "PROMOTED" if promote else "REJECTED")
 
     if promote:
@@ -133,8 +161,17 @@ def main():
         client.set_registered_model_alias(MODEL_NAME, "champion", challenger_version)
         print(f"\nDECISION: PROMOTED. @champion now points to version {challenger_version} "
               f"(old champion v{champion_version} kept as @previous).")
-    else:
-        print(f"\nDECISION: REJECTED. @champion stays on version {champion_version}.")
+        return "PROMOTED"
+
+    print(f"\nDECISION: REJECTED. @champion stays on version {champion_version}.")
+    return "REJECTED"
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["registered", "weak", "retrain"], default="registered")
+    args = parser.parse_args()
+    run_gate(None if args.mode == "registered" else args.mode)
 
 
 if __name__ == "__main__":
