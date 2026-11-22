@@ -1,8 +1,6 @@
 import logging
-from pathlib import Path
 
 import pandas as pd
-from django.conf import settings
 from rest_framework import serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -75,11 +73,18 @@ class DriftCheckView(APIView):
         if not isinstance(records, list) or len(records) < 30:
             return Response({"error": "Send a 'records' list with at least 30 customers."},
                             status=status.HTTP_400_BAD_REQUEST)
-        ref = pd.read_csv(Path(settings.BASE_DIR) / "data" / "reference.csv")
+
+        try:
+            ref = services.get_reference()
+        except Exception as exc:
+            return Response({"error": f"Reference data unavailable: {exc}"},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
         report = psi_report(ref, pd.DataFrame(records), services.NUM, services.CAT)
+
         try:
             DriftCheckLog.objects.create(n_rows=report["n_rows"], max_psi=report["max_psi"],
                                          status=report["status"], features=report["features"])
-        except Exception as exc:
+        except Exception as exc:     # never break the drift check because of the audit log
             log.warning("Could not save drift log: %s", exc)
         return Response(report)

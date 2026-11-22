@@ -17,24 +17,48 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 mlflow.set_tracking_uri("http://localhost:5000")
 mlflow.set_experiment("churn-scoring")
 
-# 1) Load the data and split it three ways: 60% train, 20% validation, 20% test
-df = pd.read_csv("data/customers.csv")
-X, y = df.drop(columns="churn"), df["churn"]
-
-X_temp, X_test, y_temp, y_test = train_test_split(
-    X, y, test_size=0.2, stratify=y, random_state=42)
-X_train, X_val, y_train, y_val = train_test_split(
-    X_temp, y_temp, test_size=0.25, stratify=y_temp, random_state=42)  # 25% of 80% = 20%
-
-Path("data").mkdir(exist_ok=True)
-# Reference data for the PSI drift monitor
-X_train.to_csv("data/reference.csv", index=False)
-# Locked holdout: saved here, never used in this script (only the Step 4 gate reads it)
-X_test.assign(churn=y_test).to_csv("data/holdout.csv", index=False)
+DATA = Path("data")
+DATA.mkdir(exist_ok=True)
+HOLDOUT = DATA / "holdout.csv"
+REFERENCE = DATA / "reference.csv"
 
 NUM = ["tenure_months", "monthly_charges", "monthly_usage_hours",
        "support_tickets", "payment_delays"]
 CAT = ["contract_type", "company_size"]
+
+
+def freeze_holdout(df):
+    """Create the holdout ONCE. Later runs reuse it and never overwrite it.
+
+    Each holdout row keeps 'source_row' = its row number in customers.csv, so
+    future training can exclude exactly those rows (new rows must be APPENDED
+    to customers.csv, never inserted in the middle).
+    """
+    if HOLDOUT.exists():
+        h = pd.read_csv(HOLDOUT)
+        if "source_row" in h.columns:
+            return h
+        print("Old holdout.csv has no 'source_row': rebuilding it (same rows).")
+    _, test_idx = train_test_split(
+        df.index, test_size=0.2, stratify=df["churn"], random_state=42)
+    h = df.loc[test_idx].copy()
+    h.insert(0, "source_row", h.index)
+    h.to_csv(HOLDOUT, index=False)
+    print(f"Holdout frozen: {len(h)} rows -> {HOLDOUT}")
+    return h
+
+
+# 1) Load the data, exclude the frozen holdout, split the rest 75/25 train/validation
+df = pd.read_csv("data/customers.csv")
+holdout = freeze_holdout(df)
+pool = df.drop(index=holdout["source_row"], errors="ignore")
+
+X, y = pool.drop(columns="churn"), pool["churn"]
+X_train, X_val, y_train, y_val = train_test_split(
+    X, y, test_size=0.25, stratify=y, random_state=42)
+
+# Reference sample for the PSI drift monitor (also logged inside every MLflow run)
+X_train.to_csv(REFERENCE, index=False)
 
 
 # 2) Preprocessing + model in ONE Pipeline (nothing is learned outside the training rows)
@@ -68,6 +92,8 @@ for name, clf in candidates.items():
 
         mlflow.log_param("model_type", name)
         mlflow.log_params({f"clf__{k}": v for k, v in clf.get_params().items()})
+        mlflow.log_params({"n_train": len(X_train), "n_val": len(X_val),
+                           "n_holdout": len(holdout)})
         mlflow.log_metrics({
             "val_roc_auc": val_auc,
             "val_pr_auc": val_pr,
@@ -79,6 +105,10 @@ for name, clf in candidates.items():
         PrecisionRecallDisplay.from_predictions(y_val, proba, ax=ax[1])
         mlflow.log_figure(fig, "curves.png")
         plt.close(fig)
+
+        # The PSI reference travels with the model: drift is measured against
+        # the data THIS model was trained on.
+        mlflow.log_artifact(str(REFERENCE))
 
         signature = infer_signature(X_train, pipe.predict_proba(X_train))
         mlflow.sklearn.log_model(

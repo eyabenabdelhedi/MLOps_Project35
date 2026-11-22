@@ -25,3 +25,20 @@ class DriftCheckLog(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class PromotionLog(models.Model):
+    """One row per champion/challenger decision made by training/promote.py."""
+    created_at = models.DateTimeField(auto_now_add=True)
+    champion_version = models.CharField(max_length=20)
+    challenger_version = models.CharField(max_length=20)
+    champion_f1 = models.FloatField()
+    champion_auc = models.FloatField()
+    challenger_f1 = models.FloatField()
+    challenger_auc = models.FloatField()
+    min_delta = models.FloatField()
+    decision = models.CharField(max_length=20)   # promoted / kept / rolled_back
+    reason = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]

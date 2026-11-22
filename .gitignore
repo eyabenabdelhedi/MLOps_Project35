@@ -31,3 +31,11 @@ Thumbs.db
 # Temporary files
 *.logdata/new_batch.csv
 data/new_batch.csv
+
+# Generated data (recreated by training/train.py)
+data/reference.csv
+data/new_batch.csv
+data/production_*.csv
+
+# Old backups
+training/workflow_old.py
