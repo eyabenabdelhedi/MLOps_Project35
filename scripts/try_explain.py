@@ -2,6 +2,9 @@ import mlflow
 import mlflow.sklearn
 import pandas as pd
 import base64
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.explain import explain_customer
 
