@@ -1,52 +1,77 @@
-"""
-Automated workflow:  drift check  ->  retrain  ->  verification gate.
-
-1. Compares a batch of production customers with the training data (PSI).
-2. If at least one feature is in ALERT, it trains a new candidate and runs the gate.
-   The gate promotes it ONLY if AUC and F1 both beat the champion.
-3. If nothing drifted, it stops: the champion keeps serving.
-
-Usage (run from the project root, MLflow server running):
-    python training/workflow.py                                  # uses data/production_drifted.csv
-    python training/workflow.py --batch data/production_stable.csv
-"""
-
-import argparse
+﻿import os
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+os.chdir(ROOT)
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "training"))
+
+import mlflow
+import mlflow.sklearn
 import pandas as pd
+from mlflow import MlflowClient
+from mlflow.models import infer_signature
+from sklearn.ensemble import GradientBoostingClassifier
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))                 # so 'monitoring' can be imported
-sys.path.insert(0, str(ROOT / "training"))    # so 'retrain_gate' can be imported
+from gate import MODEL_NAME, run_gate
+from monitoring.psi_batch import psi_report
+from pipeline import CAT, NUM, build_pipeline
 
-from monitoring.psi import psi_report         # noqa: E402
-from retrain_gate import run_gate             # noqa: E402
+mlflow.set_tracking_uri("http://localhost:5000")
+PSI_THRESHOLD = 0.25   # "significant" drift
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--batch", default="data/production_drifted.csv")
-    args = parser.parse_args()
+def load_pool() -> pd.DataFrame:
+    """All labelled customers EXCEPT the locked holdout rows."""
+    full = pd.read_csv("data/customers.csv")
+    hold = pd.read_csv("data/holdout.csv").drop_duplicates()
+    merged = full.merge(hold, how="left", indicator=True)
+    return merged[merged["_merge"] == "left_only"].drop(columns="_merge")
 
-    reference = pd.read_csv(ROOT / "data" / "reference.csv")
-    batch = pd.read_csv(ROOT / args.batch)[list(reference.columns)]
 
-    print(f"STEP 1 - Drift check: {len(batch)} production customers vs {len(reference)} training customers")
-    report = psi_report(reference, batch)
-    for _, row in report.iterrows():
-        print(f"  [{row['status']:<7}] {row['feature']:<22} PSI = {row['psi']:.4f}")
-    alerts = int((report["status"] == "ALERT").sum())
+def retrain_candidate(batch: pd.DataFrame) -> str:
+    pool = load_pool()
+    train = pd.concat([pool, batch], ignore_index=True) if "churn" in batch.columns else pool
+    X, y = train.drop(columns="churn")[NUM + CAT], train["churn"]
 
-    if alerts == 0:
-        print("\nNo feature in ALERT: the champion keeps serving. Nothing to retrain.")
+    clf = GradientBoostingClassifier(n_estimators=150, learning_rate=0.08,
+                                     max_depth=3, random_state=42)
+    pipe = build_pipeline(clf).fit(X, y)
+
+    mlflow.set_experiment("churn-scoring")
+    with mlflow.start_run(run_name="retrain_after_drift"):
+        mlflow.log_param("model_type", "gradient_boosting_retrain")  # ignored by register.py
+        mlflow.log_params({f"clf__{k}": v for k, v in clf.get_params().items()})
+        mlflow.log_metric("train_rows", len(train))
+        info = mlflow.sklearn.log_model(
+            pipe, name="model",
+            signature=infer_signature(X, pipe.predict_proba(X)),
+            input_example=X.head(3),
+            serialization_format="cloudpickle")
+    mv = mlflow.register_model(info.model_uri, MODEL_NAME)
+    MlflowClient().set_registered_model_alias(MODEL_NAME, "challenger", mv.version)
+    return mv.version
+
+
+def main(batch_path: str):
+    batch = pd.read_csv(batch_path)
+    ref = pd.read_csv("data/reference.csv")
+    report = psi_report(ref, batch, NUM, CAT)
+    print(f"Drift check on {report['n_rows']} rows: max PSI={report['max_psi']} -> {report['status']}")
+    for k, v in report["features"].items():
+        print(f"   {k:22s} {v['psi']:.3f}  {v['level']}")
+
+    if report["max_psi"] < PSI_THRESHOLD:
+        print("No significant drift: no retraining.")
         return
-
-    print(f"\nSTEP 2 - {alerts} feature(s) in ALERT: training a new candidate and running the gate")
-    decision = run_gate("retrain", trigger="psi_drift", drift_alerts=alerts)
-    print(f"\nWORKFLOW RESULT: {decision}")
+    print("Significant drift: retraining a candidate...")
+    v = retrain_candidate(batch)
+    print(f"Candidate registered as @challenger (v{v}). Running the gate...")
+    run_gate()
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        raise SystemExit("Usage: python training/workflow.py data/new_batch.csv")
+    main(sys.argv[1])

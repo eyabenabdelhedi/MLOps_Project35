@@ -1,8 +1,7 @@
-
 """
 Django settings for the MLOps Project 35.
 """
-
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -61,12 +60,25 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 # Database used by Django
 # This is separate from the MLflow database.
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+# SQLite by default; PostgreSQL when USE_POSTGRES=1 is set in the environment.
+if os.environ.get("USE_POSTGRES") == "1":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("POSTGRES_DB", "mlops_churn"),
+            "USER": os.environ.get("POSTGRES_USER", "postgres"),
+            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
+            "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
+            "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

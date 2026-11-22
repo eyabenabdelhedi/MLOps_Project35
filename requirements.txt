@@ -1,0 +1,12 @@
+@'
+django
+djangorestframework
+mlflow
+scikit-learn
+pandas
+matplotlib
+shap
+cloudpickle
+psycopg[binary]
+requests
+'@ | Set-Content -Path requirements.txt -Encoding utf8

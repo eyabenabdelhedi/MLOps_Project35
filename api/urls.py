@@ -1,10 +1,10 @@
 from django.urls import path
-
-from .drift import DriftCheckView
-from .views import CustomerExplanationView, CustomerPredictionView
+from .ui import explain_page
+from .views import DriftCheckView, ExplainView, PredictView
 
 urlpatterns = [
-    path("predict/", CustomerPredictionView.as_view(), name="predict"),
-    path("explain/", CustomerExplanationView.as_view(), name="explain"),
-    path("drift/check/", DriftCheckView.as_view(), name="drift-check"),
+    path("predict/", PredictView.as_view()),
+    path("explain/", ExplainView.as_view()),
+    path("drift/check/", DriftCheckView.as_view()),
+    path("ui/", explain_page),
 ]

@@ -17,22 +17,27 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 mlflow.set_tracking_uri("http://localhost:5000")
 mlflow.set_experiment("churn-scoring")
 
-# 1) Load the data and split it: 80% study book (train), 20% exam (test)
+# 1) Load the data and split it three ways: 60% train, 20% validation, 20% test
 df = pd.read_csv("data/customers.csv")
 X, y = df.drop(columns="churn"), df["churn"]
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, stratify=y, random_state=42)
 
-# Snapshot of the training data, used later by the PSI drift monitor
+X_temp, X_test, y_temp, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42)
+X_train, X_val, y_train, y_val = train_test_split(
+    X_temp, y_temp, test_size=0.25, stratify=y_temp, random_state=42)  # 25% of 80% = 20%
+
 Path("data").mkdir(exist_ok=True)
+# Reference data for the PSI drift monitor
 X_train.to_csv("data/reference.csv", index=False)
+# Locked holdout: saved here, never used in this script (only the Step 4 gate reads it)
+X_test.assign(churn=y_test).to_csv("data/holdout.csv", index=False)
 
 NUM = ["tenure_months", "monthly_charges", "monthly_usage_hours",
        "support_tickets", "payment_delays"]
 CAT = ["contract_type", "company_size"]
 
 
-# 2) The conveyor belt: preprocessing + model in ONE object
+# 2) Preprocessing + model in ONE Pipeline (nothing is learned outside the training rows)
 def build_pipeline(clf):
     num = Pipeline([("imp", SimpleImputer(strategy="median")),
                     ("sc", StandardScaler())])
@@ -42,7 +47,7 @@ def build_pipeline(clf):
     return Pipeline([("preprocess", pre), ("clf", clf)])
 
 
-# 3) The three candidate machines
+# 3) The three candidates
 candidates = {
     "logreg": LogisticRegression(max_iter=1000, C=1.0),
     "random_forest": RandomForestClassifier(n_estimators=200, max_depth=8, random_state=42),
@@ -50,24 +55,28 @@ candidates = {
                                                     max_depth=3, random_state=42),
 }
 
-# 4) Train each one and write everything in the MLflow notebook
+# 4) Train each one, evaluate on VALIDATION, log everything to MLflow
 for name, clf in candidates.items():
     with mlflow.start_run(run_name=name):
-        pipe = build_pipeline(clf).fit(X_train, y_train)   # learns from the study book only
-        proba = pipe.predict_proba(X_test)[:, 1]            # probability of churn on the exam
+        pipe = build_pipeline(clf).fit(X_train, y_train)
+        proba = pipe.predict_proba(X_val)[:, 1]
         pred = (proba >= 0.5).astype(int)
+
+        val_auc = roc_auc_score(y_val, proba)
+        val_pr = average_precision_score(y_val, proba)
+        val_f1 = f1_score(y_val, pred)
 
         mlflow.log_param("model_type", name)
         mlflow.log_params({f"clf__{k}": v for k, v in clf.get_params().items()})
         mlflow.log_metrics({
-            "roc_auc": roc_auc_score(y_test, proba),
-            "pr_auc": average_precision_score(y_test, proba),
-            "f1": f1_score(y_test, pred),
+            "val_roc_auc": val_auc,
+            "val_pr_auc": val_pr,
+            "val_f1": val_f1,
         })
 
         fig, ax = plt.subplots(1, 2, figsize=(10, 4))
-        RocCurveDisplay.from_predictions(y_test, proba, ax=ax[0])
-        PrecisionRecallDisplay.from_predictions(y_test, proba, ax=ax[1])
+        RocCurveDisplay.from_predictions(y_val, proba, ax=ax[0])
+        PrecisionRecallDisplay.from_predictions(y_val, proba, ax=ax[1])
         mlflow.log_figure(fig, "curves.png")
         plt.close(fig)
 
@@ -79,5 +88,4 @@ for name, clf in candidates.items():
             input_example=X_train.head(3),
             serialization_format="cloudpickle",
         )
-        print(f"{name:18s} AUC={roc_auc_score(y_test, proba):.3f}  "
-              f"F1={f1_score(y_test, pred):.3f}")
+        print(f"{name:18s} val AUC={val_auc:.3f}  PR-AUC={val_pr:.3f}  F1={val_f1:.3f}")
