@@ -68,10 +68,6 @@ Django API: `http://127.0.0.1:8000/api/predict/` and `http://127.0.0.1:8000/api/
 
 MLflow UI: `http://127.0.0.1:5000/`
 
-## Contributors
-
-Add your team members here.
-
 ## Academic Project
 
 DS1 — Subject #35  
