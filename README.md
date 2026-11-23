@@ -169,6 +169,49 @@ Example SHAP waterfall: `docs/waterfall_api.png`
 - The drift endpoint only reports PSI; retraining is started by running `training/workflow.py`, not by the endpoint itself.
 - The dataset is synthetic.
 - Models are saved with cloudpickle, which should only be loaded from trusted sources (here, your own MLflow server).
+## Option B: Run with Docker (one command)
+
+Requires Docker Desktop. This starts PostgreSQL, MLflow and the Django website already connected, with no Python, Pipenv or PostgreSQL install needed.
+
+```bash
+git clone https://github.com/eyabenabdelhedi/MLOps_Project35.git
+cd MLOps_Project35
+docker compose up --build -d
+docker compose ps
+```
+
+Wait until `postgres` and `mlflow` show `healthy` and `web` shows `Up`. The first build takes a few minutes.
+
+Then train and register the models inside the web container:
+
+```bash
+docker compose exec web python training/train.py
+docker compose exec web python training/register.py
+```
+
+Open:
+
+- MLflow: http://127.0.0.1:5000
+- SHAP explanation page: http://127.0.0.1:8000/api/ui/
+
+Other commands:
+
+```bash
+docker compose exec web python training/workflow.py --simulate drifted --dry-run
+docker compose exec web python training/workflow.py --simulate drifted
+docker compose exec web python training/promote.py
+docker compose exec web python training/promote.py --rollback
+docker compose exec web python manage.py test api
+docker compose logs web
+docker compose down        # stop (add -v to also delete stored data)
+```
+
+Notes:
+
+- Ports 5000 and 8000 must be free (stop any local MLflow or Django first).
+- The database password defaults to `postgres`. To change it, set `POSTGRES_PASSWORD` in a local `.env` file (never commit it).
+- Docker has its own empty MLflow registry, so run `train` and `register` the first time.
+- If you see file errors on Windows, move the project out of OneDrive (for example `C:\dev\MLOps_Project35`).
 
 ## Contributors
 

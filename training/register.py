@@ -1,7 +1,8 @@
+import os
 import mlflow
 from mlflow import MlflowClient
 
-mlflow.set_tracking_uri("http://localhost:5000")
+mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
 client = MlflowClient()
 
 EXPERIMENT = "churn-scoring"

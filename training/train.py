@@ -1,3 +1,4 @@
+import os
 import mlflow
 import mlflow.sklearn
 import pandas as pd
@@ -14,7 +15,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-mlflow.set_tracking_uri("http://localhost:5000")
+mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000"))
 mlflow.set_experiment("churn-scoring")
 
 DATA = Path("data")
